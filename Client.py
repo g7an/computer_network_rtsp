@@ -9,6 +9,11 @@ CACHE_FILE_NAME = "cache-"
 CACHE_FILE_EXT = ".jpg"
 
 class Client:
+	SETUP_REQ = 'SETUP'
+	PLAY_REQ = 'PLAY'
+	PAUSE_REQ = 'PAUSE'
+	TEARDOWN_REQ = 'TEARDOWN'
+
 	INIT = 0
 	READY = 1
 	PLAYING = 2
@@ -18,6 +23,9 @@ class Client:
 	PLAY = 1
 	PAUSE = 2
 	TEARDOWN = 3
+
+	TRANSPORT_HEADER="RTP/UDP"
+	RTSP_VERSION = "RTSP/1.0"
 	
 	# Initiation..
 	def __init__(self, master, serveraddr, serverport, rtpport, filename):
@@ -106,7 +114,25 @@ class Client:
                     # TO COMPLETE
                     #-------------
                     # Statistics about the session are printed here
-                    # ...
+					# calculate RTP packet loss rate and the video data rate (in bits per second)
+					# and print it out
+					#
+					# Hint: you can use the following code to get the current time
+					import time
+					curr_time = time.time()
+					#
+					# Hint: you can use the following code to calculate the number of bits
+					# received in the last second
+					# bitsRec = (currFrameNbr - self.frameNbr)*RTP_PAYLOAD_SIZE
+					# frameCount=len(self.loadedFrame)
+					# print "client frame count: %s, total frame from server: %s" % (str(frameCount),self.totalFrame)
+					total_bytes=len(rtpPacket)
+					data_rate = total_bytes*8/(curr_time - rtpPacket.timestamp())
+					# calculate rtp packet loss rate based on the current frame number
+					# and the total frame number
+					#
+					# Hint: you can use the following code to calculate the number of lost packets
+					lost_packets = (currFrameNbr - self.frameNbr)/self.frameNbr if self.frameNbr != 0 else 0
 										
 					if currFrameNbr > self.frameNbr: # Discard the late packet
 						self.frameNbr = currFrameNbr
@@ -156,51 +182,61 @@ class Client:
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
 			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			# request = ...
+			# insert transport header, specify RTP/UDP port number just created
+			request = f"{self.SETUP_REQ} {self.fileName} {self.RTSP_VERSION}\n" 
+			request += f"CSeq: {self.rtspSeq}\n"
+			print(f"client_port= {self.rtpPort}")
+			request += f"Transport: {self.TRANSPORT_HEADER}; client_port= {self.rtpPort}"
 			
 			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.SETUP
 		
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
 			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			# request = ...
+			request = f"{self.PLAY_REQ} {self.fileName} {self.RTSP_VERSION}\n"
+			request += f"CSeq: {self.rtspSeq}\n"
+			request += f"Session: {self.sessionId}"
 			
 			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.PLAY
 		
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
 			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			# request = ...
+			request = f"{self.PAUSE_REQ} {self.fileName} {self.RTSP_VERSION}\n"
+			request += f"CSeq: {self.rtspSeq}\n"
+			request += f"Session: {self.sessionId}"
 			
 			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
 			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
 			# Write the RTSP request to be sent.
-			# request = ...
+			request = f"{self.TEARDOWN_REQ} {self.fileName} {self.RTSP_VERSION}\n"
+			request += f"CSeq: {self.rtspSeq}\n"
+			request += f"Session: {self.sessionId}"
 			
 			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.TEARDOWN
 		else:
 			return
 		
 		# Send the RTSP request using rtspSocket.
-		# ...
+		self.rtspSocket.send(request.encode())
 		
 		print('\nData sent:\n' + request)
 	
@@ -238,19 +274,19 @@ class Client:
 						# TO COMPLETE
 						#-------------
 						# Update RTSP state.
-						# self.state = ...
+						self.state = self.READY
 						
 						# Open RTP port.
 						self.openRtpPort() 
 					elif self.requestSent == self.PLAY:
-						# self.state = ...
+						self.state = self.PLAYING
 					elif self.requestSent == self.PAUSE:
-						# self.state = ...
+						self.state = self.READY
 						
 						# The play thread exits. A new thread is created on resume.
 						self.playEvent.set()
 					elif self.requestSent == self.TEARDOWN:
-						# self.state = ...
+						self.state = self.INIT
 						
 						# Flag the teardownAcked to close the socket.
 						self.teardownAcked = 1 
@@ -261,15 +297,17 @@ class Client:
 		# TO COMPLETE
 		#-------------
 		# Create a new datagram socket to receive RTP packets from the server
-		# self.rtpSocket = ...
-		
+		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
 		# Set the timeout value of the socket to 0.5sec
-		# ...
-		
+		socket.setdefaulttimeout(0.5)
+
+
 		try:
 			# Bind the socket to the address using the RTP port given by the client user
-			# ...
-		except:
+			self.state=self.READY
+			self.rtpSocket.bind(('', self.rtpPort))
+		except Exception:
 			tkMessageBox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
 
 	def handler(self):
